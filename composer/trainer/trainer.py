@@ -2148,7 +2148,8 @@ class Trainer:
                                 self.state.scaler.step(optimizer)
                             else:
                                 if isinstance(self.state.device, DeviceTPU):
-                                    xm.optimizer_step(optimizer, barrier=True)
+                                    xm.optimizer_step(optimizer)
+                                    #xm.optimizer_step(optimizer, barrier=True)
                                 else:
                                     optimizer.step()
             except RuntimeError as e:
