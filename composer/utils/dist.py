@@ -90,12 +90,12 @@ def _get_distributed_config_var(
     if dist.is_initialized() and fetch_fn_name is not None:
         dist_value = int(getattr(dist, fetch_fn_name)())
         # Add TPU based distributed backend configurations
-        if env_var == 'WORLD_SIZE' and xm.is_xla_available():
+        if env_var == 'WORLD_SIZE' and pjrt.using_pjrt():
             dist_value = dist.get_world_size()
             return dist_value
-        elif env_var == 'LOCAL_RANK' and xm.is_xla_available():
+        elif env_var == 'LOCAL_RANK' and pjrt.using_pjrt():
             dist_value = xm.get_local_ordinal() #pjrt.get_local_ordinal()
-        elif env_var == 'RANK' and xm.is_xla_available():
+        elif env_var == 'RANK' and pjrt.using_pjrt():
             dist_value = xm.get_ordinal()
             return dist_value
             
@@ -222,7 +222,7 @@ def all_reduce(
     """
     if dist.is_available() and dist.is_initialized():
         reduce_op = getattr(dist.ReduceOp, reduce_operation.upper())
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             xm.all_reduce(reduce_operation.lower(), tensor)
         else:
             dist.all_reduce(tensor, op=reduce_op)
@@ -249,7 +249,7 @@ def broadcast(tensor: torch.Tensor, src: int) -> None:
         src (int): Source rank
     """
     if dist.is_available() and dist.is_initialized():
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             return
         else:
             dist.broadcast(tensor, src)
@@ -282,7 +282,7 @@ def broadcast_object_list(object_list: List[Any], src: int = 0) -> None:
         None:  ``object_list`` will be modified in-place and set to values of ``object_list`` from the ``src`` rank.
     """
     if dist.is_available() and dist.is_initialized():
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             return
         else:
             dist.broadcast_object_list(object_list, src)
@@ -312,7 +312,7 @@ def all_gather(tensor: torch.Tensor) -> Sequence[torch.Tensor]:
     """
     if dist.is_available() and dist.is_initialized():
         obj_gather_list = [torch.zeros_like(tensor) for _ in range(get_world_size())]
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             obj_gathered = xm.all_gather(tensor, obj_gather_list)
             return obj_gathered
         else:
@@ -447,7 +447,7 @@ def initialize_dist(device: Union[str, Device], timeout: float = 300.0):
     if dist_env_vars_match_defaults:
         # Fill in the remaining single-rank variables
         os.environ.update(dist_env_var_defaults)
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             try:
                 dist.init_process_group('xla', init_method='pjrt://')
             except RuntimeError as e:
@@ -455,7 +455,7 @@ def initialize_dist(device: Union[str, Device], timeout: float = 300.0):
         else:        
             dist.init_process_group(device_obj.dist_backend, store=dist.HashStore(), world_size=1, rank=0)
     else:
-        if xm.is_xla_available():
+        if pjrt.using_pjrt():
             try:
                 dist.init_process_group('xla', init_method='pjrt://')
             except RuntimeError as e:
