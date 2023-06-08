@@ -411,7 +411,9 @@ def initialize_dist(device: Union[str, Device], timeout: float = 300.0):
                            'not available in your installation of PyTorch. Please install or build PyTorch '
                            'with distributed support.')
 
-    if dist.is_initialized():
+    if pjrt.using_pjrt():
+        print ('using pjrt')
+    elif dist.is_initialized():
         if dist.get_backend() != device_obj.dist_backend.lower():
             raise RuntimeError(f'The requested backend ({device_obj.dist_backend}) differs from the backend '
                                f'of the current process group ({dist.get_backend()}). If you '
@@ -452,7 +454,7 @@ def initialize_dist(device: Union[str, Device], timeout: float = 300.0):
                 dist.init_process_group('xla', init_method='pjrt://')
             except RuntimeError as e:
                 print ('RuntimeError in dist.init_process_group when dist_env_vars_match_defaults is true - may already be initialized')
-        else:        
+        else:
             dist.init_process_group(device_obj.dist_backend, store=dist.HashStore(), world_size=1, rank=0)
     else:
         if pjrt.using_pjrt():
