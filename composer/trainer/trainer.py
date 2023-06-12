@@ -1962,9 +1962,9 @@ class Trainer:
                     # total_loss_dict can be None if gradient scaling failed
                     if total_loss_dict is not None:
                         map_collection(total_loss_dict, dist.all_reduce)
-                        total_loss_dict = {
-                            k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
-                        }
+                        #total_loss_dict = {
+                            #k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
+                        #}
                         self.state.total_loss_dict = total_loss_dict
                         self.logger.log_metrics(total_loss_dict)
 
