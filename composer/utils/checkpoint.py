@@ -24,6 +24,7 @@ from composer.utils.file_helpers import (FORMAT_NAME_WITH_DIST_AND_TIME_TABLE, f
                                          format_name_with_dist_and_time, get_file, is_tar)
 from composer.utils.misc import is_model_deepspeed
 from composer.utils.object_store import ObjectStore
+import torch_xla.experimental.pjrt as pjrt
 
 if TYPE_CHECKING:
     from composer.core.passes import AlgorithmPass
@@ -550,7 +551,12 @@ def save_checkpoint(
     # only rank 0 saves the state_dict unless state.fsdp_sharded_state_dict_enabled=True.
     if dist.get_global_rank() == 0 or state.fsdp_sharded_state_dict_enabled:
         with open(save_filename, 'wb') as f:
-            torch.save(state_dict, f)
+            if pjrt.using_pjrt():
+                print ('no checkpoint for now')
+                #import torch_xla.core.xla_model as xm
+                #xm.save(state_dict, f)
+            else:
+                torch.save(state_dict, f)
 
         if is_tar(save_filename):
             _compress_file(save_filename, basename=_COMPOSER_STATES_FILENAME)

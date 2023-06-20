@@ -450,18 +450,20 @@ def initialize_dist(device: Union[str, Device], timeout: float = 300.0):
         # Fill in the remaining single-rank variables
         os.environ.update(dist_env_var_defaults)
         if pjrt.using_pjrt():
-            try:
-                dist.init_process_group('xla', init_method='pjrt://')
-            except RuntimeError as e:
-                print ('RuntimeError in dist.init_process_group when dist_env_vars_match_defaults is true - may already be initialized')
+            print ('using pjrt')
+            #try:
+            #    dist.init_process_group('xla', init_method='pjrt://')
+            #except RuntimeError as e:
+            #    print ('RuntimeError in dist.init_process_group when dist_env_vars_match_defaults is true - may already be initialized')
         else:
             dist.init_process_group(device_obj.dist_backend, store=dist.HashStore(), world_size=1, rank=0)
     else:
         if pjrt.using_pjrt():
-            try:
-                dist.init_process_group('xla', init_method='pjrt://')
-            except RuntimeError as e:
-                print ('RuntimeError in dist.init_process_group when dist_env_vars_match_defaults is true - may already be initialized')
+            print ('using pjrt')
+            #try:
+            #    dist.init_process_group('xla', init_method='pjrt://')
+            #except RuntimeError as e:
+            #    print ('RuntimeError in dist.init_process_group when dist_env_vars_match_defaults is true - may already be initialized')
         else:
             dist.init_process_group(device_obj.dist_backend, timeout=timeout_timedelta)
 
