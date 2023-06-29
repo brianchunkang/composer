@@ -57,6 +57,8 @@ import torch_xla.experimental.pjrt as pjrt
 if is_tpu_installed():
     import torch_xla.core.xla_model as xm
     import torch_xla.distributed.parallel_loader as pl
+    #debug
+    import torch_xla
 
 log = logging.getLogger(__name__)
 
@@ -2316,6 +2318,9 @@ class Trainer:
 
             with _get_precision_context(self.state.precision, self.deepspeed_enabled):
                 self.state.outputs = self.state.model(self.state.batch)
+                
+            # Add print to debug
+            #xm.master_print(torch_xla._XLAC._xla_tensors_report(0, str(xm.xla_device())))
 
             self.engine.run_event(Event.AFTER_FORWARD)
 
@@ -2377,12 +2382,12 @@ class Trainer:
                 self.state.deepspeed_model.backward(microbatch_loss)
 
             else:
-                # Scale loss based on the number of samples in the microbatch to maintain gradient numerics
-                microbatch_loss.mul_(microbatch_num_samples / current_batch_size)
                 if pjrt.using_pjrt():
                     print ('placeholder for pjrt backward loss')
                     microbatch_loss.backward()
                 else:
+                    # Scale loss based on the number of samples in the microbatch to maintain gradient numerics
+                    microbatch_loss.mul_(microbatch_num_samples / current_batch_size)
                     microbatch_loss.backward(create_graph=self._backwards_create_graph)
 
             self.engine.run_event(Event.AFTER_BACKWARD)
