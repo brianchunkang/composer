@@ -2405,7 +2405,6 @@ class Trainer:
 
             else:
                 if pjrt.using_pjrt():
-                    print ('placeholder for pjrt backward loss')
                     microbatch_loss.backward()
                 else:
                     # Scale loss based on the number of samples in the microbatch to maintain gradient numerics
