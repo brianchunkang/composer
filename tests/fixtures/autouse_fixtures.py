@@ -1,6 +1,7 @@
 # Copyright 2022 MosaicML Composer authors
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import logging
 import os
 import pathlib
@@ -27,11 +28,12 @@ def disable_tokenizer_parallelism():
 
 
 @pytest.fixture(autouse=True)
-def clear_cuda_cache():
-    """This fixture ensures that we don't have memory leakages during pytest by clearing
-       the CUDA cache before every test.
-    """
-    torch.cuda.empty_cache()
+def clear_cuda_cache(request):
+    """Clear memory between GPU tests."""
+    marker = request.node.get_closest_marker('gpu')
+    if marker is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()  # Only gc on GPU tests as it 2x slows down CPU tests
 
 
 @pytest.fixture(autouse=True)
