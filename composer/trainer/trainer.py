@@ -1932,6 +1932,11 @@ class Trainer:
         assert self.state.dataloader is not None, 'dataloader is set in __init__() or fit()'
         assert self._train_data_spec is not None, 'The train data spec is set in __init__() or fit()'
         assert self.state.scaler is not None, 'scaler should have been set in __init__()'
+        
+        # Add metrics debug
+        import torch_xla.debug.metrics as met
+        # For full report that includes all metrics.
+        print(met.metrics_report())
 
         self.engine.run_event(Event.FIT_START)
 
@@ -1946,6 +1951,8 @@ class Trainer:
             self._rng_state = None
 
         self.state.model.train()
+        # For full report that includes all metrics.
+        print(met.metrics_report())
         finished_epoch_early = False
         last_wct = datetime.datetime.now()
 
@@ -2000,9 +2007,9 @@ class Trainer:
                     # total_loss_dict can be None if gradient scaling failed
                     if total_loss_dict is not None:
                         map_collection(total_loss_dict, dist.all_reduce)
-                        #total_loss_dict = {
-                            #k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
-                        #}
+                        total_loss_dict = {
+                            k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
+                        }
                         self.state.total_loss_dict = total_loss_dict
                         self.logger.log_metrics(total_loss_dict)
 
@@ -2099,6 +2106,8 @@ class Trainer:
             self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
             self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
 
+        # Clear metrics debug
+        met.clear_all()
         self.engine.run_event(Event.FIT_END)
         self._run_evaluators(Event.FIT_END)
 
