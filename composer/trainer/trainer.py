@@ -62,6 +62,7 @@ if is_tpu_installed():
     import torch_xla.distributed.parallel_loader as pl
     #debug
     import torch_xla
+    import torch_xla.debug.profiler as xp
 
 log = logging.getLogger(__name__)
 
@@ -1933,10 +1934,11 @@ class Trainer:
         assert self._train_data_spec is not None, 'The train data spec is set in __init__() or fit()'
         assert self.state.scaler is not None, 'scaler should have been set in __init__()'
         
-        # Add metrics debug
-        import torch_xla.debug.metrics as met
-        # For full report that includes all metrics.
-        print(met.metrics_report())
+        if pjrt.using_pjrt():
+            # Add metrics debug
+            import torch_xla.debug.metrics as met
+            # For full report that includes all metrics.
+            print(met.metrics_report())
 
         self.engine.run_event(Event.FIT_START)
 
@@ -1951,8 +1953,6 @@ class Trainer:
             self._rng_state = None
 
         self.state.model.train()
-        # For full report that includes all metrics.
-        print(met.metrics_report())
         finished_epoch_early = False
         last_wct = datetime.datetime.now()
 
@@ -1967,102 +1967,104 @@ class Trainer:
                     dataloader.sampler.set_epoch(int(self.state.timestamp.epoch))
 
                 for batch_idx, self.state.batch in enumerate(self._iter_dataloader(TrainerMode.TRAIN)):
-                    # Spin dataloader forward unless dataloader handles internally with dataset_resumption
-                    if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
-                            self.state.timestamp.batch_in_epoch):
-                        # Restore the RNG state immediately before the next batch is yielded from the dataloader
-                        if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
-                            reproducibility.load_rng_state(self._rng_state)
-                            self._rng_state = None
-                        continue
+                    with xp.StepTrace('train_loop', step_num=batch_idx):
+                        with xp.Trace('build_graph'):
+                            # Spin dataloader forward unless dataloader handles internally with dataset_resumption
+                            if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
+                                    self.state.timestamp.batch_in_epoch):
+                                # Restore the RNG state immediately before the next batch is yielded from the dataloader
+                                if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
+                                    reproducibility.load_rng_state(self._rng_state)
+                                    self._rng_state = None
+                                continue
 
-                    self.state.batch = self.state.device.batch_to_device(self.state.batch)
-                    self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
-                    rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
-                    rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
+                            self.state.batch = self.state.device.batch_to_device(self.state.batch)
+                            self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
+                            rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
+                            rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
 
-                    if self.state.deepspeed_enabled:
-                        self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
+                            if self.state.deepspeed_enabled:
+                                self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
 
-                    self.engine.run_event(Event.AFTER_DATALOADER)
+                            self.engine.run_event(Event.AFTER_DATALOADER)
 
-                    self.engine.run_event(Event.BATCH_START)
+                            self.engine.run_event(Event.BATCH_START)
 
-                    # Log time values
-                    self.logger.log_metrics({
-                        'time/batch': self.state.timestamp.batch.value,
-                        'time/sample': self.state.timestamp.sample.value,
-                        'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
-                        'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
-                    })
-                    if rank_num_tokens > 0:
-                        self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
-                        self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
+                            # Log time values
+                            self.logger.log_metrics({
+                                'time/batch': self.state.timestamp.batch.value,
+                                'time/sample': self.state.timestamp.sample.value,
+                                'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
+                                'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
+                            })
+                            if rank_num_tokens > 0:
+                                self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
+                                self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
 
-                    total_loss_dict = self._train_batch(use_grad_scaling)
+                            total_loss_dict = self._train_batch(use_grad_scaling)
 
-                    if use_grad_scaling:
-                        self.state.scaler.update()
+                            if use_grad_scaling:
+                                self.state.scaler.update()
 
-                    # total_loss_dict can be None if gradient scaling failed
-                    if total_loss_dict is not None:
-                        map_collection(total_loss_dict, dist.all_reduce)
-                        total_loss_dict = {
-                            k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
-                        }
-                        self.state.total_loss_dict = total_loss_dict
-                        self.logger.log_metrics(total_loss_dict)
+                            # total_loss_dict can be None if gradient scaling failed
+                            if total_loss_dict is not None:
+                                map_collection(total_loss_dict, dist.all_reduce)
+                                total_loss_dict = {
+                                    k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
+                                }
+                                self.state.total_loss_dict = total_loss_dict
+                                self.logger.log_metrics(total_loss_dict)
 
-                    # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
-                    # next batch's wall clock time. The time accumulation must be done here so schedulers
-                    # have the latest timing information
+                            # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
+                            # next batch's wall clock time. The time accumulation must be done here so schedulers
+                            # have the latest timing information
 
-                    now = datetime.datetime.now()
+                            now = datetime.datetime.now()
 
-                    batch_time = now - last_wct
+                            batch_time = now - last_wct
 
-                    total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
-                        rank_num_samples,
-                        rank_num_tokens,
-                        batch_time,
-                    )
+                            total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
+                                rank_num_samples,
+                                rank_num_tokens,
+                                batch_time,
+                            )
 
-                    # `now` is actually in the past, but want to include the time it takes to perform this reduction
-                    last_wct = now
+                            # `now` is actually in the past, but want to include the time it takes to perform this reduction
+                            last_wct = now
 
-                    if self._scheduler_step_frequency == TimeUnit.BATCH:
-                        for scheduler in self.state.schedulers:
-                            scheduler.step()
+                            if self._scheduler_step_frequency == TimeUnit.BATCH:
+                                for scheduler in self.state.schedulers:
+                                    scheduler.step()
 
-                    if self.state.train_metrics is not None:
-                        self._compute_and_log_metrics(
-                            dataloader_label='train',
-                            metrics=self.state.train_metrics,
-                        )
+                            if self.state.train_metrics is not None:
+                                self._compute_and_log_metrics(
+                                    dataloader_label='train',
+                                    metrics=self.state.train_metrics,
+                                )
 
-                    self.state.previous_timestamp = self.state.timestamp
-                    self.state.timestamp = self.state.timestamp.to_next_batch(
-                        samples=total_num_samples,
-                        tokens=total_num_tokens,
-                        duration=batch_time,
-                    )
+                            self.state.previous_timestamp = self.state.timestamp
+                            self.state.timestamp = self.state.timestamp.to_next_batch(
+                                samples=total_num_samples,
+                                tokens=total_num_tokens,
+                                duration=batch_time,
+                            )
 
-                    self.engine.run_event(Event.BATCH_END)
+                            self.engine.run_event(Event.BATCH_END)
 
-                    # Pause the timing during evaluation
-                    # Evaluation time is tracked separately in state.eval_timestamp
-                    duration = datetime.datetime.now() - last_wct
-                    self._run_evaluators(Event.BATCH_END)
-                    last_wct = datetime.datetime.now() - duration
+                            # Pause the timing during evaluation
+                            # Evaluation time is tracked separately in state.eval_timestamp
+                            duration = datetime.datetime.now() - last_wct
+                            self._run_evaluators(Event.BATCH_END)
+                            last_wct = datetime.datetime.now() - duration
 
-                    self.engine.run_event(Event.BATCH_CHECKPOINT)
+                            self.engine.run_event(Event.BATCH_CHECKPOINT)
 
-                    if self.state.timestamp >= self.state.max_duration:
-                        # If max_duration is specified in batches, samples, or tokens, and
-                        # and the max_duration is reached mid-epoch, then break out of the dataloader
-                        # to finish the epoch early and finish training.
-                        finished_epoch_early = True
-                        break
+                            if self.state.timestamp >= self.state.max_duration:
+                                # If max_duration is specified in batches, samples, or tokens, and
+                                # and the max_duration is reached mid-epoch, then break out of the dataloader
+                                # to finish the epoch early and finish training.
+                                finished_epoch_early = True
+                                break
 
                 if not finished_epoch_early or self.state.dataloader_len == self.state.timestamp.batch_in_epoch:
                     # Trigger the epoch end events if the dataloader was exhausted.
