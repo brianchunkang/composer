@@ -1153,8 +1153,9 @@ class Trainer:
             'node_name': os.environ.get('NODENAME', 'unknown because NODENAME environment variable not set')
         })
 
-        if not isinstance(self.state.model, ComposerModel):
-            raise ValueError('Provided model must be a subclass of ComposerModel.')
+        # Comment out for xla fsdp
+        #if not isinstance(self.state.model, ComposerModel):
+        #    raise ValueError('Provided model must be a subclass of ComposerModel.')
 
         # After running Event.INIT, then set the "optional" elements of state that could be passed in on FIT instead of INIT
         # Setting these attributes here ensures that algorithms do not depend on unavailable attributes during Event.INIT
@@ -2197,7 +2198,9 @@ class Trainer:
                                 self.state.scaler.step(optimizer)
                             else:
                                 if isinstance(self.state.device, DeviceTPU):
-                                    xm.optimizer_step(optimizer)
+                                    #For FSDP using optimizer.step()
+                                    optimizer.step()
+                                    #xm.optimizer_step(optimizer)
                                     #xm.optimizer_step(optimizer, barrier=True)
                                 else:
                                     optimizer.step()
