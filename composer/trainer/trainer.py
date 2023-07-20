@@ -1968,104 +1968,107 @@ class Trainer:
                     dataloader.sampler.set_epoch(int(self.state.timestamp.epoch))
 
                 for batch_idx, self.state.batch in enumerate(self._iter_dataloader(TrainerMode.TRAIN)):
-                    with xp.StepTrace('train_loop', step_num=batch_idx):
-                        with xp.Trace('build_graph'):
-                            # Spin dataloader forward unless dataloader handles internally with dataset_resumption
-                            if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
-                                    self.state.timestamp.batch_in_epoch):
-                                # Restore the RNG state immediately before the next batch is yielded from the dataloader
-                                if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
-                                    reproducibility.load_rng_state(self._rng_state)
-                                    self._rng_state = None
-                                continue
+                    # Spin dataloader forward unless dataloader handles internally with dataset_resumption
+                    print (f"Number of compilations before dataloader: {met.metric_data('CompileTime')[:1]})")
+                    if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
+                            self.state.timestamp.batch_in_epoch):
+                        # Restore the RNG state immediately before the next batch is yielded from the dataloader
+                        if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
+                            reproducibility.load_rng_state(self._rng_state)
+                            self._rng_state = None
+                        continue
 
-                            self.state.batch = self.state.device.batch_to_device(self.state.batch)
-                            self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
-                            rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
-                            rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
+                    self.state.batch = self.state.device.batch_to_device(self.state.batch)
+                    self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
+                    rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
+                    rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
 
-                            if self.state.deepspeed_enabled:
-                                self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
+                    if self.state.deepspeed_enabled:
+                        self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
 
-                            self.engine.run_event(Event.AFTER_DATALOADER)
+                    self.engine.run_event(Event.AFTER_DATALOADER)
 
-                            self.engine.run_event(Event.BATCH_START)
+                    print (f"Number of compilations after dataloader, before batch start: {met.metric_data('CompileTime')[:1]})")
+                    
+                    self.engine.run_event(Event.BATCH_START)
 
-                            # Log time values
-                            self.logger.log_metrics({
-                                'time/batch': self.state.timestamp.batch.value,
-                                'time/sample': self.state.timestamp.sample.value,
-                                'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
-                                'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
-                            })
-                            if rank_num_tokens > 0:
-                                self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
-                                self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
+                    # Log time values
+                    self.logger.log_metrics({
+                        'time/batch': self.state.timestamp.batch.value,
+                        'time/sample': self.state.timestamp.sample.value,
+                        'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
+                        'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
+                    })
+                    if rank_num_tokens > 0:
+                        self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
+                        self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
 
-                            total_loss_dict = self._train_batch(use_grad_scaling)
+                    total_loss_dict = self._train_batch(use_grad_scaling)
 
-                            if use_grad_scaling:
-                                self.state.scaler.update()
+                    if use_grad_scaling:
+                        self.state.scaler.update()
 
-                            # total_loss_dict can be None if gradient scaling failed
-                            if total_loss_dict is not None:
-                                map_collection(total_loss_dict, dist.all_reduce)
-                                total_loss_dict = {
-                                    k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
-                                }
-                                self.state.total_loss_dict = total_loss_dict
-                                self.logger.log_metrics(total_loss_dict)
+                    # total_loss_dict can be None if gradient scaling failed
+                    #if total_loss_dict is not None:
+                    #    map_collection(total_loss_dict, dist.all_reduce)
+                    #    total_loss_dict = {
+                    #        k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
+                    #    }
+                    #    self.state.total_loss_dict = total_loss_dict
+                    #    self.logger.log_metrics(total_loss_dict)
 
-                            # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
-                            # next batch's wall clock time. The time accumulation must be done here so schedulers
-                            # have the latest timing information
+                    # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
+                    # next batch's wall clock time. The time accumulation must be done here so schedulers
+                    # have the latest timing information
 
-                            now = datetime.datetime.now()
+                    now = datetime.datetime.now()
 
-                            batch_time = now - last_wct
+                    batch_time = now - last_wct
 
-                            total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
-                                rank_num_samples,
-                                rank_num_tokens,
-                                batch_time,
-                            )
+                    total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
+                        rank_num_samples,
+                        rank_num_tokens,
+                        batch_time,
+                    )
 
-                            # `now` is actually in the past, but want to include the time it takes to perform this reduction
-                            last_wct = now
+                    # `now` is actually in the past, but want to include the time it takes to perform this reduction
+                    last_wct = now
 
-                            if self._scheduler_step_frequency == TimeUnit.BATCH:
-                                for scheduler in self.state.schedulers:
-                                    scheduler.step()
+                    if self._scheduler_step_frequency == TimeUnit.BATCH:
+                        for scheduler in self.state.schedulers:
+                            scheduler.step()
 
-                            if self.state.train_metrics is not None:
-                                self._compute_and_log_metrics(
-                                    dataloader_label='train',
-                                    metrics=self.state.train_metrics,
-                                )
+                    if self.state.train_metrics is not None:
+                        self._compute_and_log_metrics(
+                            dataloader_label='train',
+                            metrics=self.state.train_metrics,
+                        )
 
-                            self.state.previous_timestamp = self.state.timestamp
-                            self.state.timestamp = self.state.timestamp.to_next_batch(
-                                samples=total_num_samples,
-                                tokens=total_num_tokens,
-                                duration=batch_time,
-                            )
+                    self.state.previous_timestamp = self.state.timestamp
+                    self.state.timestamp = self.state.timestamp.to_next_batch(
+                        samples=total_num_samples,
+                        tokens=total_num_tokens,
+                        duration=batch_time,
+                    )
 
-                            self.engine.run_event(Event.BATCH_END)
+                    self.engine.run_event(Event.BATCH_END)
+                    print(f"Number of compilations after batch end, before eval: {met.metric_data('CompileTime')[:1]}")
 
-                            # Pause the timing during evaluation
-                            # Evaluation time is tracked separately in state.eval_timestamp
-                            duration = datetime.datetime.now() - last_wct
-                            self._run_evaluators(Event.BATCH_END)
-                            last_wct = datetime.datetime.now() - duration
+                    # Pause the timing during evaluation
+                    # Evaluation time is tracked separately in state.eval_timestamp
+                    duration = datetime.datetime.now() - last_wct
+                    self._run_evaluators(Event.BATCH_END)
+                    print(f"Number of compilations after eval: {met.metric_data('CompileTime')[:1]}")
+                    last_wct = datetime.datetime.now() - duration
 
-                            self.engine.run_event(Event.BATCH_CHECKPOINT)
+                    self.engine.run_event(Event.BATCH_CHECKPOINT)
 
-                            if self.state.timestamp >= self.state.max_duration:
-                                # If max_duration is specified in batches, samples, or tokens, and
-                                # and the max_duration is reached mid-epoch, then break out of the dataloader
-                                # to finish the epoch early and finish training.
-                                finished_epoch_early = True
-                                break
+                    if self.state.timestamp >= self.state.max_duration:
+                        # If max_duration is specified in batches, samples, or tokens, and
+                        # and the max_duration is reached mid-epoch, then break out of the dataloader
+                        # to finish the epoch early and finish training.
+                        finished_epoch_early = True
+                        break
 
                 if not finished_epoch_early or self.state.dataloader_len == self.state.timestamp.batch_in_epoch:
                     # Trigger the epoch end events if the dataloader was exhausted.
@@ -2098,6 +2101,8 @@ class Trainer:
                 log.info(f'Skipping the rest of Epoch {int(self.state.timestamp.epoch)}')
 
         # Log final time values
+        print(f"Number of compilations before final log: {met.metric_data('CompileTime')[:1]}")
+
         self.logger.log_metrics({
             'time/epoch': self.state.timestamp.epoch.value,
             'time/batch': self.state.timestamp.batch.value,
@@ -2297,11 +2302,11 @@ class Trainer:
                 microbatch_loss_dict = self._train_microbatch(use_grad_scaling, current_batch_size, is_final_microbatch)
 
                 # Aggregate each loss in microbatch_loss_dict into total_loss_dict
-                for k, microbatch_loss in microbatch_loss_dict.items():
-                    loss_key = f'loss/train/{k}'
-                    if loss_key not in total_loss_dict:
-                        total_loss_dict[loss_key] = self.state.device.tensor_to_device(torch.zeros(size=(1,)))
-                    total_loss_dict[loss_key] += microbatch_loss
+            #    for k, microbatch_loss in microbatch_loss_dict.items():
+            #        loss_key = f'loss/train/{k}'
+            #        if loss_key not in total_loss_dict:
+            #            total_loss_dict[loss_key] = self.state.device.tensor_to_device(torch.zeros(size=(1,)))
+            #        total_loss_dict[loss_key] += microbatch_loss
 
             # Restore batch
             self.state.batch = current_batch
