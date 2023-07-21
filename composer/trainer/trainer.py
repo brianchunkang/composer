@@ -63,6 +63,10 @@ if is_tpu_installed():
     #debug
     import torch_xla
     import torch_xla.debug.profiler as xp
+    
+    # Add metrics debug
+    import torch_xla.debug.metrics as met
+    import datetime as dt
 
 log = logging.getLogger(__name__)
 
@@ -897,8 +901,12 @@ class Trainer:
 
         # compile config for PyTorch 2.0 or higher
         compile_config: Optional[Dict[str, Any]] = None,
+        
+        # index for single device printing
+        index: Optional[str] = None,
     ):
-
+        print (f"index = {index}")
+        self.index = index
         self.auto_log_hparams = auto_log_hparams
         self.python_log_level = python_log_level
         if self.python_log_level is not None:
@@ -1936,8 +1944,6 @@ class Trainer:
         assert self.state.scaler is not None, 'scaler should have been set in __init__()'
         
         if pjrt.using_pjrt():
-            # Add metrics debug
-            import torch_xla.debug.metrics as met
             # For full report that includes all metrics.
             print(met.metrics_report())
 
@@ -1971,7 +1977,9 @@ class Trainer:
                     with xp.StepTrace('train_loop', step_num=batch_idx):
                         with xp.Trace('build_graph'):
                             # Spin dataloader forward unless dataloader handles internally with dataset_resumption
-                            print (f"Number of compilations before dataloader: {met.metric_data('CompileTime')[:1]})")
+                            if self.index==0: 
+                                start_time = dt.datetime.now()
+                                print (f"Number of compilations before dataloader: {met.metric_data('CompileTime')[:1]})")
                             if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
                                     self.state.timestamp.batch_in_epoch):
                                 # Restore the RNG state immediately before the next batch is yielded from the dataloader
@@ -1990,7 +1998,11 @@ class Trainer:
 
                             self.engine.run_event(Event.AFTER_DATALOADER)
 
-                            print (f"Number of compilations after dataloader, before batch start: {met.metric_data('CompileTime')[:1]})")
+                            if self.index==0:
+                                end_time = dt.datetime.now()
+                                print (f"Duration of last compilation check: {end_time-start_time}")
+                                start_time = dt.datetime.now()
+                                print (f"Number of compilations after dataloader, before batch start: {met.metric_data('CompileTime')[:1]})")
                             
                             self.engine.run_event(Event.BATCH_START)
 
@@ -2004,7 +2016,7 @@ class Trainer:
                             if rank_num_tokens > 0:
                                 self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
                                 self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
-
+                            
                             total_loss_dict = self._train_batch(use_grad_scaling)
 
                             if use_grad_scaling:
@@ -2171,7 +2183,8 @@ class Trainer:
         assert self._train_data_spec is not None, 'The train data spec should be set on __init__ or fit()'
 
         # Cache the device batch, because `self.state.batch` gets overridden in microbatching loop.
-        # Any in-place changes to a microbatch will be reflected in the device batch.
+        # Any in-place changes to a microbatch will be reflected in the device batch.        
+        print(f"Number of compilations before device batch: {met.metric_data('CompileTime')[:1]}") 
         device_batch = self.state.batch
 
         # Retry until we successfully complete training and return loss
@@ -2179,17 +2192,18 @@ class Trainer:
             # Reset train_metrics on every batch
             # Placing reset here ensures that if auto grad accum catches an OOM, incomplete metric state is cleared
             if self.state.train_metrics is not None:
+                print(f"Number of compilations before metrics reset: {met.metric_data('CompileTime')[:1]}") 
                 for _, metric in self.state.train_metrics.items():
                     metric.reset()
 
-            # Do not use total loss dict for TPU
-            if not pjrt.using_pjrt():
-                total_loss_dict = {'loss/train/total': self.state.device.tensor_to_device(torch.zeros(size=(1,)))}
+            print(f"Number of compilations before total loss dict: {met.metric_data('CompileTime')[:1]}") 
+            total_loss_dict = {'loss/train/total': self.state.device.tensor_to_device(torch.zeros(size=(1,)))}
             
             found_cuda_oom = 0  # int since bool BOR not supported on all torch.distributed backends
             try:
                 assert self.state.scaler is not None
                 assert self.state.device_train_microbatch_size is not None
+                print(f"Number of compilations before split batch: {met.metric_data('CompileTime')[:1]}") 
                 microbatches = self._train_data_spec.split_batch(device_batch, self.state.device_train_microbatch_size)
                 if self._use_closures():
                     for optimizer in self.state.optimizers:
@@ -2201,6 +2215,7 @@ class Trainer:
                             optimizer.step(closure=lambda loss_dict=total_loss_dict, **kwargs: self._train_microbatches(
                                 microbatches, loss_dict, **kwargs).item())
                 else:
+                    print(f"Number of compilations before train microbatches: {met.metric_data('CompileTime')[:1]}") 
                     self._train_microbatches(microbatches, total_loss_dict)
                     if not self.state.deepspeed_enabled:
                         for optimizer in self.state.optimizers:
@@ -2209,11 +2224,13 @@ class Trainer:
                             else:
                                 if isinstance(self.state.device, DeviceTPU):
                                     #For FSDP using optimizer.step()
+                                    print(f"Number of compilations before optimizer step: {met.metric_data('CompileTime')[:1]}") 
                                     optimizer.step()
                                     #xm.optimizer_step(optimizer)
                                     #xm.optimizer_step(optimizer, barrier=True)
                                 else:
                                     optimizer.step()
+                                print(f"Number of compilations after optimizer step: {met.metric_data('CompileTime')[:1]}") 
             except RuntimeError as e:
                 if self.state.auto_microbatching and _is_cuda_oom(e):
                     log.debug((f"Rank {dist.get_global_rank()} OOM'd."))
@@ -2339,8 +2356,18 @@ class Trainer:
         assert self._train_data_spec is not None
 
         # Cache the device batch, because `self.state.batch` gets overridden in microbatching loop
+        if self.index==0:
+            end_time = dt.datetime.now()
+            print (f"Duration of last compilation check: {end_time-start_time}")
+            start_time = dt.datetime.now()
+            print (f"Number of compilations before device batch in microbatxh: {met.metric_data('CompileTime')[:1]})")
         device_batch = deepcopy(self.state.batch)
 
+        if self.index==0:
+            end_time = dt.datetime.now()
+            print (f"Duration of last compilation check: {end_time-start_time}")
+            start_time = dt.datetime.now()
+            print (f"Number of compilations before microbatch num samples: {met.metric_data('CompileTime')[:1]})")
         microbatch_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
         if self.state.deepspeed_enabled or not isinstance(self.state.model, DistributedDataParallel):
             sync_context = contextlib.nullcontext()
@@ -2356,6 +2383,11 @@ class Trainer:
                      ' to avoid deadlock on first batch, so ddp_sync_strategy will be ignored.')
             sync_context = contextlib.nullcontext()
         else:
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before ddp sync context: {met.metric_data('CompileTime')[:1]})")
             sync_context = ddp_sync_context(
                 self.state,
                 is_final_microbatch,
@@ -2366,6 +2398,11 @@ class Trainer:
             # Forward pass
             self.engine.run_event(Event.BEFORE_FORWARD)
 
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before precision context: {met.metric_data('CompileTime')[:1]})")
             with _get_precision_context(self.state.precision, self.state.precision_config,
                                         self.state.deepspeed_enabled):
                 self.state.outputs = self.state.model(self.state.batch)
@@ -2374,6 +2411,11 @@ class Trainer:
             #xm.master_print(torch_xla._XLAC._xla_tensors_report(0, str(xm.xla_device())))
 
             self.engine.run_event(Event.AFTER_FORWARD)
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations after forward: {met.metric_data('CompileTime')[:1]})")
 
             # Check if other ranks OOMed after forward pass when using auto microbatching. This may
             # happen when close to memory limit or with uneven memory usage across ranks
@@ -2391,7 +2433,12 @@ class Trainer:
 
             # Loss
             self.engine.run_event(Event.BEFORE_LOSS)
-
+            
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before loss: {met.metric_data('CompileTime')[:1]})")
             with _get_precision_context(self.state.precision, self.state.precision_config,
                                         self.state.deepspeed_enabled):
                 self.state.loss = self._original_model.loss(self.state.outputs, self.state.batch)
@@ -2402,6 +2449,11 @@ class Trainer:
             # Backward Pass
             self.engine.run_event(Event.BEFORE_BACKWARD)
 
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before backward: {met.metric_data('CompileTime')[:1]})")
             microbatch_loss_dict = {}
             # If total loss key is present, copy loss
             if isinstance(self.state.loss, dict) and ('total' in self.state.loss):
@@ -2409,11 +2461,21 @@ class Trainer:
                 microbatch_loss_dict = self.state.loss.copy()
             # If total loss key is not present, sum individual losses
             else:
+                if self.index==0:
+                    end_time = dt.datetime.now()
+                    print (f"Duration of last compilation check: {end_time-start_time}")
+                    start_time = dt.datetime.now()
+                    print (f"Number of compilations before sum individual losses: {met.metric_data('CompileTime')[:1]})")
                 microbatch_loss = self.state.device.tensor_to_device(torch.zeros(size=(1,)))
                 for loss in ensure_tuple(self.state.loss):
                     microbatch_loss.add_(loss.mean())
 
                 # Copy the loss if it is a dictionary
+                if self.index==0:
+                    end_time = dt.datetime.now()
+                    print (f"Duration of last compilation check: {end_time-start_time}")
+                    start_time = dt.datetime.now()
+                    print (f"Number of compilations before copying the loss from dict: {met.metric_data('CompileTime')[:1]})")
                 if isinstance(self.state.loss, dict):
                     microbatch_loss_dict = self.state.loss.copy()
                 # If not, create a dictionary with generic loss names
@@ -2421,12 +2483,23 @@ class Trainer:
                     microbatch_loss_dict = {f'loss{i}': loss for i, loss in enumerate(ensure_tuple(self.state.loss))}
 
                 # Include total loss
+                if self.index==0:
+                    end_time = dt.datetime.now()
+                    print (f"Duration of last compilation check: {end_time-start_time}")
+                    start_time = dt.datetime.now()
+                    print (f"Number of compilations before setting total loss: {met.metric_data('CompileTime')[:1]})")
                 microbatch_loss_dict['total'] = microbatch_loss
 
             # For each loss to log: detach, clone, mean, then multiply by (microbatch size) / (batch size)
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before detach: {met.metric_data('CompileTime')[:1]})")
             for k, loss in microbatch_loss_dict.items():
                 microbatch_loss_dict[k] = loss.detach().clone().mean() * (microbatch_num_samples / current_batch_size)
 
+            
             if use_grad_scaling:
                 microbatch_loss = cast(torch.Tensor, self.state.scaler.scale(microbatch_loss))
 
@@ -2434,6 +2507,11 @@ class Trainer:
                 self.state.deepspeed_model.backward(microbatch_loss)
 
             else:
+                if self.index==0:
+                    end_time = dt.datetime.now()
+                    print (f"Duration of last compilation check: {end_time-start_time}")
+                    start_time = dt.datetime.now()
+                    print (f"Number of compilations before backward pass: {met.metric_data('CompileTime')[:1]})")
                 if pjrt.using_pjrt():
                     microbatch_loss.backward()
                 else:
@@ -2444,6 +2522,11 @@ class Trainer:
             self.engine.run_event(Event.AFTER_BACKWARD)
 
             # Use microbatch outputs to update training metrics
+            if self.index==0:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
+                print (f"Number of compilations before updating train metrics: {met.metric_data('CompileTime')[:1]})")
             if self.state.train_metrics is not None:
                 self.state.train_metrics = self._ensure_metrics_device_and_dtype(self.state.train_metrics)
                 self._eval_train_metrics(device_batch)
