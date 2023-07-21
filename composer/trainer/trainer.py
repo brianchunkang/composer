@@ -2066,12 +2066,18 @@ class Trainer:
                             )
 
                             self.engine.run_event(Event.BATCH_END)
+                            end_time = dt.datetime.now()
+                            print (f"Duration of last compilation check: {end_time-start_time}")
+                            start_time = dt.datetime.now()
                             print(f"Number of compilations after batch end, before eval: {met.metric_data('CompileTime')[:1]}")
 
                             # Pause the timing during evaluation
                             # Evaluation time is tracked separately in state.eval_timestamp
                             duration = datetime.datetime.now() - last_wct
                             self._run_evaluators(Event.BATCH_END)
+                            end_time = dt.datetime.now()
+                            print (f"Duration of last compilation check: {end_time-start_time}")
+                            start_time = dt.datetime.now()
                             print(f"Number of compilations after eval: {met.metric_data('CompileTime')[:1]}")
                             last_wct = datetime.datetime.now() - duration
 
@@ -2115,6 +2121,9 @@ class Trainer:
                 log.info(f'Skipping the rest of Epoch {int(self.state.timestamp.epoch)}')
 
         # Log final time values
+        end_time = dt.datetime.now()
+        print (f"Duration of last compilation check: {end_time-start_time}")
+        start_time = dt.datetime.now()
         print(f"Number of compilations before final log: {met.metric_data('CompileTime')[:1]}")
 
         self.logger.log_metrics({
@@ -2183,7 +2192,10 @@ class Trainer:
         assert self._train_data_spec is not None, 'The train data spec should be set on __init__ or fit()'
 
         # Cache the device batch, because `self.state.batch` gets overridden in microbatching loop.
-        # Any in-place changes to a microbatch will be reflected in the device batch.        
+        # Any in-place changes to a microbatch will be reflected in the device batch. 
+        end_time = dt.datetime.now()
+        print (f"Duration of last compilation check: {end_time-start_time}")
+        start_time = dt.datetime.now()       
         print(f"Number of compilations before device batch: {met.metric_data('CompileTime')[:1]}") 
         device_batch = self.state.batch
 
@@ -2192,10 +2204,16 @@ class Trainer:
             # Reset train_metrics on every batch
             # Placing reset here ensures that if auto grad accum catches an OOM, incomplete metric state is cleared
             if self.state.train_metrics is not None:
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
                 print(f"Number of compilations before metrics reset: {met.metric_data('CompileTime')[:1]}") 
                 for _, metric in self.state.train_metrics.items():
                     metric.reset()
 
+            end_time = dt.datetime.now()
+            print (f"Duration of last compilation check: {end_time-start_time}")
+            start_time = dt.datetime.now()
             print(f"Number of compilations before total loss dict: {met.metric_data('CompileTime')[:1]}") 
             total_loss_dict = {'loss/train/total': self.state.device.tensor_to_device(torch.zeros(size=(1,)))}
             
@@ -2203,6 +2221,9 @@ class Trainer:
             try:
                 assert self.state.scaler is not None
                 assert self.state.device_train_microbatch_size is not None
+                end_time = dt.datetime.now()
+                print (f"Duration of last compilation check: {end_time-start_time}")
+                start_time = dt.datetime.now()
                 print(f"Number of compilations before split batch: {met.metric_data('CompileTime')[:1]}") 
                 microbatches = self._train_data_spec.split_batch(device_batch, self.state.device_train_microbatch_size)
                 if self._use_closures():
@@ -2215,6 +2236,9 @@ class Trainer:
                             optimizer.step(closure=lambda loss_dict=total_loss_dict, **kwargs: self._train_microbatches(
                                 microbatches, loss_dict, **kwargs).item())
                 else:
+                    end_time = dt.datetime.now()
+                    print (f"Duration of last compilation check: {end_time-start_time}")
+                    start_time = dt.datetime.now()
                     print(f"Number of compilations before train microbatches: {met.metric_data('CompileTime')[:1]}") 
                     self._train_microbatches(microbatches, total_loss_dict)
                     if not self.state.deepspeed_enabled:
@@ -2224,12 +2248,18 @@ class Trainer:
                             else:
                                 if isinstance(self.state.device, DeviceTPU):
                                     #For FSDP using optimizer.step()
+                                    end_time = dt.datetime.now()
+                                    print (f"Duration of last compilation check: {end_time-start_time}")
+                                    start_time = dt.datetime.now()
                                     print(f"Number of compilations before optimizer step: {met.metric_data('CompileTime')[:1]}") 
                                     optimizer.step()
                                     #xm.optimizer_step(optimizer)
                                     #xm.optimizer_step(optimizer, barrier=True)
                                 else:
                                     optimizer.step()
+                                end_time = dt.datetime.now()
+                                print (f"Duration of last compilation check: {end_time-start_time}")
+                                start_time = dt.datetime.now()
                                 print(f"Number of compilations after optimizer step: {met.metric_data('CompileTime')[:1]}") 
             except RuntimeError as e:
                 if self.state.auto_microbatching and _is_cuda_oom(e):
