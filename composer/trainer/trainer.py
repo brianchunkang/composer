@@ -1976,112 +1976,112 @@ class Trainer:
                     dataloader.sampler.set_epoch(int(self.state.timestamp.epoch))
 
                 for batch_idx, self.state.batch in enumerate(self._iter_dataloader(TrainerMode.TRAIN)):
-                    with xp.StepTrace('train_loop', step_num=batch_idx):
-                        with xp.Trace('build_graph'):
-                            # Spin dataloader forward unless dataloader handles internally with dataset_resumption
-                            if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
-                                    self.state.timestamp.batch_in_epoch):
-                                # Restore the RNG state immediately before the next batch is yielded from the dataloader
-                                if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
-                                    reproducibility.load_rng_state(self._rng_state)
-                                    self._rng_state = None
-                                continue
+                    #with xp.StepTrace('train_loop', step_num=batch_idx):
+                        #with xp.Trace('build_graph'):
+                    # Spin dataloader forward unless dataloader handles internally with dataset_resumption
+                    if self.spin_dataloaders and 'train' not in self.state.dataset_resumption and batch_idx < int(
+                            self.state.timestamp.batch_in_epoch):
+                        # Restore the RNG state immediately before the next batch is yielded from the dataloader
+                        if batch_idx + 1 == int(self.state.timestamp.batch_in_epoch) and self._rng_state is not None:
+                            reproducibility.load_rng_state(self._rng_state)
+                            self._rng_state = None
+                        continue
 
-                            self.state.batch = self.state.device.batch_to_device(self.state.batch)
-                            self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
-                            rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
-                            rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
+                    self.state.batch = self.state.device.batch_to_device(self.state.batch)
+                    self.state.batch = self._train_data_spec.device_transforms(self.state.batch)
+                    rank_num_samples = self._train_data_spec.get_num_samples_in_batch(self.state.batch)
+                    rank_num_tokens = self._train_data_spec.get_num_tokens_in_batch(self.state.batch)
 
-                            if self.state.deepspeed_enabled:
-                                self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
+                    if self.state.deepspeed_enabled:
+                        self.state.batch = _fix_batch_precision_for_deepspeed(self.state.batch, self.state.precision)
 
-                            self.engine.run_event(Event.AFTER_DATALOADER)
+                    self.engine.run_event(Event.AFTER_DATALOADER)
 
-                            self.engine.run_event(Event.BATCH_START)
+                    self.engine.run_event(Event.BATCH_START)
 
-                            # Log time values
-                            self.logger.log_metrics({
-                                'time/batch': self.state.timestamp.batch.value,
-                                'time/sample': self.state.timestamp.sample.value,
-                                'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
-                                'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
-                            })
-                            if rank_num_tokens > 0:
-                                self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
-                                self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
-                            
-                            total_loss_dict = self._train_batch(use_grad_scaling)
+                    # Log time values
+                    self.logger.log_metrics({
+                        'time/batch': self.state.timestamp.batch.value,
+                        'time/sample': self.state.timestamp.sample.value,
+                        'time/batch_in_epoch': self.state.timestamp.batch_in_epoch.value,
+                        'time/sample_in_epoch': self.state.timestamp.sample_in_epoch.value,
+                    })
+                    if rank_num_tokens > 0:
+                        self.logger.log_metrics({'time/token': self.state.timestamp.token.value})
+                        self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
+                    
+                    total_loss_dict = self._train_batch(use_grad_scaling)
 
-                            if use_grad_scaling:
-                                self.state.scaler.update()
+                    if use_grad_scaling:
+                        self.state.scaler.update()
 
-                            # total_loss_dict can be None if gradient scaling failed
-                            #if total_loss_dict is not None:
-                            #    map_collection(total_loss_dict, dist.all_reduce)
-                            #    total_loss_dict = {
-                            #        k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
-                            #    }
-                            #    self.state.total_loss_dict = total_loss_dict
-                            #    self.logger.log_metrics(total_loss_dict)
+                    # total_loss_dict can be None if gradient scaling failed
+                    #if total_loss_dict is not None:
+                    #    map_collection(total_loss_dict, dist.all_reduce)
+                    #    total_loss_dict = {
+                    #        k: loss.cpu().item() / dist.get_world_size() for k, loss in total_loss_dict.items()
+                    #    }
+                    #    self.state.total_loss_dict = total_loss_dict
+                    #    self.logger.log_metrics(total_loss_dict)
 
-                            # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
-                            # next batch's wall clock time. The time accumulation must be done here so schedulers
-                            # have the latest timing information
+                    # The scheduler step.step() and compute_and_log_metrics() are going to be included in the
+                    # next batch's wall clock time. The time accumulation must be done here so schedulers
+                    # have the latest timing information
 
-                            now = datetime.datetime.now()
+                    now = datetime.datetime.now()
 
-                            batch_time = now - last_wct
+                    batch_time = now - last_wct
 
-                            total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
-                                rank_num_samples,
-                                rank_num_tokens,
-                                batch_time,
-                            )
+                    total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
+                        rank_num_samples,
+                        rank_num_tokens,
+                        batch_time,
+                    )
 
-                            # `now` is actually in the past, but want to include the time it takes to perform this reduction
-                            last_wct = now
+                    # `now` is actually in the past, but want to include the time it takes to perform this reduction
+                    last_wct = now
 
-                            if self._scheduler_step_frequency == TimeUnit.BATCH:
-                                for scheduler in self.state.schedulers:
-                                    scheduler.step()
+                    if self._scheduler_step_frequency == TimeUnit.BATCH:
+                        for scheduler in self.state.schedulers:
+                            scheduler.step()
 
-                            if self.state.train_metrics is not None:
-                                self._compute_and_log_metrics(
-                                    dataloader_label='train',
-                                    metrics=self.state.train_metrics,
-                                )
+                    if self.state.train_metrics is not None:
+                        self._compute_and_log_metrics(
+                            dataloader_label='train',
+                            metrics=self.state.train_metrics,
+                        )
 
-                            self.state.previous_timestamp = self.state.timestamp
-                            self.state.timestamp = self.state.timestamp.to_next_batch(
-                                samples=total_num_samples,
-                                tokens=total_num_tokens,
-                                duration=batch_time,
-                            )
+                    self.state.previous_timestamp = self.state.timestamp
+                    self.state.timestamp = self.state.timestamp.to_next_batch(
+                        samples=total_num_samples,
+                        tokens=total_num_tokens,
+                        duration=batch_time,
+                    )
 
-                            self.engine.run_event(Event.BATCH_END)
-                            
-                            # Pause the timing during evaluation
-                            # Evaluation time is tracked separately in state.eval_timestamp
-                            duration = datetime.datetime.now() - last_wct
-                            if self.index==0:
-                                self.start_time = dt.datetime.now()
-                                print(f"Number of compilations before eval: {met.metric_data('CompileTime')[:1]}")
-                            self._run_evaluators(Event.BATCH_END)
-                            if self.index==0:
-                                self.end_time = dt.datetime.now()
-                                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
-                                self.start_time = dt.datetime.now()
-                                print(f"Number of compilations after eval: {met.metric_data('CompileTime')[:1]}")
-                            last_wct = datetime.datetime.now() - duration
+                    self.engine.run_event(Event.BATCH_END)
+                    
+                    # Pause the timing during evaluation
+                    # Evaluation time is tracked separately in state.eval_timestamp
+                    duration = datetime.datetime.now() - last_wct
+                    if self.index==0:
+                        self.start_time = dt.datetime.now()
+                        #print(f"Number of compilations before eval: {met.metric_data('CompileTime')[:1]}")
+                    self._run_evaluators(Event.BATCH_END)
+                    if self.index==0:
+                        self.end_time = dt.datetime.now()
+                        print (f"After eval. Duration of last compilation check: {self.end_time-self.start_time}")
+                        self.start_time = dt.datetime.now()
+                        #print(f"Number of compilations after eval: {met.metric_data('CompileTime')[:1]}")
+                    last_wct = datetime.datetime.now() - duration
 
-                            self.engine.run_event(Event.BATCH_CHECKPOINT)
+                    self.engine.run_event(Event.BATCH_CHECKPOINT)
 
-                            if self.state.timestamp >= self.state.max_duration:
-                                # If max_duration is specified in batches, samples, or tokens, and
-                                # and the max_duration is reached mid-epoch, then break out of the dataloader
-                                # to finish the epoch early and finish training.
-                                finished_epoch_early = True
-                                break
+                    if self.state.timestamp >= self.state.max_duration:
+                        # If max_duration is specified in batches, samples, or tokens, and
+                        # and the max_duration is reached mid-epoch, then break out of the dataloader
+                        # to finish the epoch early and finish training.
+                        finished_epoch_early = True
+                        break
 
                 if not finished_epoch_early or self.state.dataloader_len == self.state.timestamp.batch_in_epoch:
                     # Trigger the epoch end events if the dataloader was exhausted.
@@ -2126,7 +2126,7 @@ class Trainer:
             self.logger.log_metrics({'time/token_in_epoch': self.state.timestamp.token_in_epoch.value})
 
         # Clear metrics debug
-        met.clear_all()
+        #met.clear_all()
         self.engine.run_event(Event.FIT_END)
         self._run_evaluators(Event.FIT_END)
 
@@ -2183,9 +2183,9 @@ class Trainer:
         # Any in-place changes to a microbatch will be reflected in the device batch.   
         if self.index==0:
             self.end_time = dt.datetime.now()
-            print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+            print (f"Before device batch. Duration of last compilation check: {self.end_time-self.start_time}")
             self.start_time = dt.datetime.now()
-            print(f"Number of compilations before device batch: {met.metric_data('CompileTime')[:1]}") 
+            #print(f"Number of compilations before device batch: {met.metric_data('CompileTime')[:1]}") 
         device_batch = self.state.batch
 
         # Retry until we successfully complete training and return loss
@@ -2195,23 +2195,23 @@ class Trainer:
             if self.state.train_metrics is not None:
                 if self.index==0:
                     self.end_time = dt.datetime.now()
-                    print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                    print (f"Before metrics reset. Duration of last compilation check: {self.end_time-self.start_time}")
                     self.start_time = dt.datetime.now()
-                    print(f"Number of compilations before metrics reset: {met.metric_data('CompileTime')[:1]}") 
+                    #print(f"Number of compilations before metrics reset: {met.metric_data('CompileTime')[:1]}") 
                 for _, metric in self.state.train_metrics.items():
                     metric.reset()
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before total loss dict. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before total loss dict calc: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before total loss dict calc: {met.metric_data('CompileTime')[:1]}") 
             total_loss_dict = {'loss/train/total': self.state.device.tensor_to_device(torch.zeros(size=(1,)))}
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"After total loss dict. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations after total loss dict calc: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations after total loss dict calc: {met.metric_data('CompileTime')[:1]}") 
             
             found_cuda_oom = 0  # int since bool BOR not supported on all torch.distributed backends
             try:
@@ -2221,9 +2221,9 @@ class Trainer:
                 if self._use_closures():
                     if self.index==0:
                         self.end_time = dt.datetime.now()
-                        print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                        print (f"Before optimizer in grad scaling. Duration of last compilation check: {self.end_time-self.start_time}")
                         self.start_time = dt.datetime.now()
-                        print(f"Number of compilations before optimizer in grad scaling: {met.metric_data('CompileTime')[:1]}") 
+                        #print(f"Number of compilations before optimizer in grad scaling: {met.metric_data('CompileTime')[:1]}") 
                     for optimizer in self.state.optimizers:
                         if use_grad_scaling:
                             self.state.scaler.step(optimizer,
@@ -2235,9 +2235,9 @@ class Trainer:
                 else:
                     if self.index==0:
                         self.end_time = dt.datetime.now()
-                        print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                        print (f"Before train microbatches. Duration of last compilation check: {self.end_time-self.start_time}")
                         self.start_time = dt.datetime.now()
-                        print(f"Number of compilations before train microbatches: {met.metric_data('CompileTime')[:1]}") 
+                        #print(f"Number of compilations before train microbatches: {met.metric_data('CompileTime')[:1]}") 
                     self._train_microbatches(microbatches, total_loss_dict)
                     if not self.state.deepspeed_enabled:
                         for optimizer in self.state.optimizers:
@@ -2248,10 +2248,15 @@ class Trainer:
                                     #For FSDP using optimizer.step()
                                     if self.index==0:
                                         self.end_time = dt.datetime.now()
-                                        print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                                        print (f"Before TPU optimizer step. Duration of last compilation check: {self.end_time-self.start_time}")
                                         self.start_time = dt.datetime.now()
-                                        print(f"Number of compilations before TPU optimizer step: {met.metric_data('CompileTime')[:1]}") 
+                                        #print(f"Number of compilations before TPU optimizer step: {met.metric_data('CompileTime')[:1]}") 
                                     optimizer.step()
+                                    xm.mark_step()
+                                    if self.index==0:
+                                        self.end_time = dt.datetime.now()
+                                        print (f"After TPU optimizer mark step. Duration of last compilation check: {self.end_time-self.start_time}")
+                                        self.start_time = dt.datetime.now()
                                     #xm.optimizer_step(optimizer)
                                     #xm.optimizer_step(optimizer, barrier=True)
                                 else:
@@ -2334,9 +2339,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch zero grad. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch zero grad: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch zero grad: {met.metric_data('CompileTime')[:1]}") 
             if not self.state.deepspeed_enabled:
                 for optimizer in self.state.optimizers:
                     try:
@@ -2351,9 +2356,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch loss dict. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch loss dict: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch loss dict: {met.metric_data('CompileTime')[:1]}") 
             
             for microbatch_idx, self.state.batch in enumerate(microbatches):
                 is_final_microbatch = microbatch_idx + 1 == len(microbatches)
@@ -2371,9 +2376,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch unscale gradients. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch unscale gradients: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch unscale gradients: {met.metric_data('CompileTime')[:1]}") 
             
             # Unscale gradients before `Event.AFTER_TRAIN_BATCH`
             if use_grad_scaling:
@@ -2427,11 +2432,15 @@ class Trainer:
             
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before forward train microbatch precision context. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print (f"Number of compilations before forward precision context: {met.metric_data('CompileTime')[:1]})")
+                #print (f"Number of compilations before forward precision context: {met.metric_data('CompileTime')[:1]})")
             with _get_precision_context(self.state.precision, self.state.precision_config,
                                         self.state.deepspeed_enabled):
+                if self.index==0:
+                    self.end_time = dt.datetime.now()
+                    print (f"Before forward train microbatch output = model. Duration of last compilation check: {self.end_time-self.start_time}")
+                    self.start_time = dt.datetime.now()
                 self.state.outputs = self.state.model(self.state.batch)
                 
             # Add print to debug
@@ -2458,9 +2467,9 @@ class Trainer:
             
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch loss. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch loss: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch loss: {met.metric_data('CompileTime')[:1]}") 
             
             with _get_precision_context(self.state.precision, self.state.precision_config,
                                         self.state.deepspeed_enabled):
@@ -2474,9 +2483,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch backward pass. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch backward pass: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch backward pass: {met.metric_data('CompileTime')[:1]}") 
             
             microbatch_loss_dict = {}
             # If total loss key is present, copy loss
@@ -2501,9 +2510,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch loss dict. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch microbatch loss dict: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch loss dict: {met.metric_data('CompileTime')[:1]}") 
             
             # For each loss to log: detach, clone, mean, then multiply by (microbatch size) / (batch size)
             for k, loss in microbatch_loss_dict.items():
@@ -2511,9 +2520,9 @@ class Trainer:
 
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"Before train microbatch cast loss. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print(f"Number of compilations before train_microbatch cast microbatch loss: {met.metric_data('CompileTime')[:1]}") 
+                #print(f"Number of compilations before train_microbatch cast microbatch loss: {met.metric_data('CompileTime')[:1]}") 
             
             if use_grad_scaling:
                 microbatch_loss = cast(torch.Tensor, self.state.scaler.scale(microbatch_loss))
@@ -2524,11 +2533,15 @@ class Trainer:
             else:
                 if self.index==0:
                     self.end_time = dt.datetime.now()
-                    print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                    print (f"Before backward pass. Duration of last compilation check: {self.end_time-self.start_time}")
                     self.start_time = dt.datetime.now()
-                    print (f"Number of compilations before backward pass: {met.metric_data('CompileTime')[:1]})")
+                    #print (f"Number of compilations before backward pass: {met.metric_data('CompileTime')[:1]})")
                 if pjrt.using_pjrt():
                     microbatch_loss.backward()
+                    xm.mark_step()
+                    self.end_time = dt.datetime.now()
+                    print (f"After mark step after backward pass. Duration of last compilation check: {self.end_time-self.start_time}")
+                    self.start_time = dt.datetime.now()
                 else:
                     # Scale loss based on the number of samples in the microbatch to maintain gradient numerics
                     microbatch_loss.mul_(microbatch_num_samples / current_batch_size)
@@ -2537,10 +2550,14 @@ class Trainer:
             self.engine.run_event(Event.AFTER_BACKWARD)
             if self.index==0:
                 self.end_time = dt.datetime.now()
-                print (f"Duration of last compilation check: {self.end_time-self.start_time}")
+                print (f"After backward pass. Duration of last compilation check: {self.end_time-self.start_time}")
                 self.start_time = dt.datetime.now()
-                print (f"Number of compilations after backward pass: {met.metric_data('CompileTime')[:1]})")
+                #print (f"Number of compilations after backward pass: {met.metric_data('CompileTime')[:1]})")
 
+            if self.index==0:
+                self.end_time = dt.datetime.now()
+                print (f"Before train microbatch update metrics. Duration of last compilation check: {self.end_time-self.start_time}")
+                self.start_time = dt.datetime.now()
             # Use microbatch outputs to update training metrics
             if self.state.train_metrics is not None:
                 self.state.train_metrics = self._ensure_metrics_device_and_dtype(self.state.train_metrics)
