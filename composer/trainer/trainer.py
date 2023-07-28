@@ -905,7 +905,7 @@ class Trainer:
         # index for single device printing
         index: Optional[str] = None,
     ):
-        print (f"index = {index}")
+        #print (f"index = {index}")
         self.index = index
         self.start_time = dt.datetime.now()
         self.end_time = dt.datetime.now()
@@ -1947,7 +1947,8 @@ class Trainer:
         
         if pjrt.using_pjrt():
             # For full report that includes all metrics.
-            print(met.metrics_report())
+            xm.master_print(met.metrics_report())
+            #print(met.metrics_report())
 
         self.engine.run_event(Event.FIT_START)
 
@@ -2032,14 +2033,17 @@ class Trainer:
 
                     batch_time = now - last_wct
 
-                    log.debug(("Start Trace of accumulate time over ranks"))
+                    trace_start_time = datetime.datetime.now()
+                    xm.master_print(f"Start Trace of accumulate time over ranks. Start time= {trace_start_time}")
+                    #log.debug(("Start Trace of accumulate time over ranks"))
                     with xp.Trace('accumulate_time_across_ranks'):
                         total_num_samples, total_num_tokens, batch_time = self._accumulate_time_across_ranks(
                             rank_num_samples,
                             rank_num_tokens,
                             batch_time,
                         )
-                    log.debug(("End Trace of accumulate time over ranks"))
+                    #log.debug(("End Trace of accumulate time over ranks"))
+                    xm.master_print(f"End Trace of accumulate time over ranks. Duration= {datetime.datetime.now() - trace_start_time}")
 
                     # `now` is actually in the past, but want to include the time it takes to perform this reduction
                     last_wct = now
@@ -2069,10 +2073,14 @@ class Trainer:
                     #if self.index==0:
                     #    self.start_time = dt.datetime.now()
                     #    #print(f"Number of compilations before eval: {met.metric_data('CompileTime')[:1]}")
-                    log.debug(("Start Trace of run evaluators"))
+                    
+                    trace_start_time = datetime.datetime.now()
+                    xm.master_print(f"Start Trace of run evaluators. Start time= {trace_start_time}")
+                    #log.debug(("Start Trace of run evaluators"))
                     with xp.Trace('run_evaluators'):
                         self._run_evaluators(Event.BATCH_END)
-                    log.debug(("End Trace of run evaluators"))
+                    #log.debug(("End Trace of run evaluators"))
+                    xm.master_print(f"End Trace of run evaluators. Duration= {datetime.datetime.now() - trace_start_time}")
                     #if self.index==0:
                     #    self.end_time = dt.datetime.now()
                     #    print (f"After eval. Duration of last compilation check: {self.end_time-self.start_time}")
@@ -2257,11 +2265,14 @@ class Trainer:
                                     #    print (f"Before TPU optimizer step. Duration of last compilation check: {self.end_time-self.start_time}")
                                     #    self.start_time = dt.datetime.now()
                                     #    #print(f"Number of compilations before TPU optimizer step: {met.metric_data('CompileTime')[:1]}") 
-                                    log.debug(("Start Trace of optimizer step."))
+                                    trace_start_time = datetime.datetime.now()
+                                    xm.master_print(f"Start Trace of optimizer step. Start time= {trace_start_time}")
+                                    #log.debug(("Start Trace of run evaluators"))
                                     with xp.Trace('optimizer_step'):
                                         optimizer.step()
                                     xm.mark_step()
-                                    log.debug(("End Trace of optimizer step."))
+                                    #log.debug(("End Trace of run evaluators"))
+                                    xm.master_print(f"End Trace of optimizer step. Duration= {datetime.datetime.now() - trace_start_time}")
                                     #if self.index==0:
                                     #    self.end_time = dt.datetime.now()
                                     #    print (f"After TPU optimizer step. Duration of last compilation check: {self.end_time-self.start_time}")
@@ -2546,9 +2557,12 @@ class Trainer:
                 #    self.start_time = dt.datetime.now()
                 #    #print (f"Number of compilations before backward pass: {met.metric_data('CompileTime')[:1]})")
                 if pjrt.using_pjrt():
+                    trace_start_time = datetime.datetime.now()
+                    xm.master_print(f"Start Trace of backward pass. Start time= {trace_start_time}")
                     with xp.Trace('backward'):
                         microbatch_loss.backward()
                     xm.mark_step() 
+                    xm.master_print(f"End Trace of backward pass. Duration= {datetime.datetime.now() - trace_start_time}")
                     #self.end_time = dt.datetime.now()
                     #print (f"After mark step after backward pass. Duration of last compilation check: {self.end_time-self.start_time}")
                     #self.start_time = dt.datetime.now()
