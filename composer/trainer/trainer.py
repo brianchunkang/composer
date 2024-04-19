@@ -2746,7 +2746,11 @@ class Trainer:
                 microbatch_loss_dict = self._train_microbatch(use_grad_scaling, current_batch_size, is_final_microbatch)
 
                 if self.state.device.dist_backend == 'xla':
-                    print ('No aggregating loss into total_loss_dict')
+                    if is_final_microbatch:
+                        print (f"microbatch loss = {microbatch_loss_dict}")
+                    for k, microbatch_loss in microbatch_loss_dict.items():
+                        loss_key = f'loss/train/{k}'
+                        total_loss_dict[loss_key] = microbatch_loss
                 else:
                     # Aggregate each loss in microbatch_loss_dict into total_loss_dict
                     for k, microbatch_loss in microbatch_loss_dict.items():
