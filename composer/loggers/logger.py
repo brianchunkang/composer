@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 import numpy as np
 import torch
 
+import torch_xla.runtime as rt
+
 from composer.utils import ensure_tuple, format_name_with_dist
 
 if TYPE_CHECKING:
@@ -183,7 +185,10 @@ def format_log_data_value(data: Any) -> str:
         return f'{data:.4f}'
     if isinstance(data, torch.Tensor):
         if data.shape == () or reduce(operator.mul, data.shape, 1) == 1:
-            return format_log_data_value(data.cpu().item())
+            if rt.using_pjrt():
+                return 'Tensor of shape ' + str(data.shape)
+            else:
+                return format_log_data_value(data.cpu().item())
         return 'Tensor of shape ' + str(data.shape)
     if isinstance(data, collections.abc.Mapping):
         output = ['{ ']
